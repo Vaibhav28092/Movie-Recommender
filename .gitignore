@@ -1,0 +1,62 @@
+# ==========================================
+# 1. SECRETS & KEYS (CRITICAL)
+# ==========================================
+.env
+.env.*
+.streamlit/secrets.toml
+*.pem
+*.key
+
+# ==========================================
+# 2. VIRTUAL ENVIRONMENTS
+# ==========================================
+venv/
+.venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# ==========================================
+# 3. PYTHON CACHE & BYTECODE
+# ==========================================
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+
+# ==========================================
+# 4. LARGE DATASETS & MODEL ARTIFACTS
+# (If your raw data or model files exceed 100MB)
+# ==========================================
+data/*.csv
+src/models/embeddings.npy
+src/models/indexed_catalog.csv
+src/models/movie.index
+src/models/user_cf.pkl
+src/models/item_cf.pkl
+src/models/user_item_matrix.npz
+src/models/tfidf_matrix.npz
+*.h5
+
+# ==========================================
+# 5. IDE & OS SYSTEM FILES
+# ==========================================
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.log
+
+
+# Ignore notebooks and .ipynb checkpoints
+*.ipynb
+notebooks/
+data/
+src/models/*.npy
+*.csv
+
+data/
+src/models/*.npy
+*.csv
