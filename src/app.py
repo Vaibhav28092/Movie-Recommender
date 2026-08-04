@@ -25,12 +25,9 @@ if not TMDB_API_KEY:
     TMDB_API_KEY = os.getenv("TMDB_API_KEY", "")
 
 
-
 # =========================================================
-# 2. AUTOMATIC MODEL & DATASET DOWNLOADER
+# AUTOMATIC MODEL & DATASET DOWNLOADER
 # =========================================================
-
-# Replace with your actual Hugging Face dataset direct URLs
 MODEL_ARTIFACTS = {
     "src/models/embeddings.npy": "https://huggingface.co/datasets/Vaibhav28092004/movielens-artifacts/resolve/main/embeddings.npy",
     "src/models/indexed_catalog.csv": "https://huggingface.co/datasets/Vaibhav28092004/movielens-artifacts/resolve/main/indexed_catalog.csv",
@@ -39,10 +36,7 @@ MODEL_ARTIFACTS = {
     "src/models/user_cf.pkl": "https://huggingface.co/datasets/Vaibhav28092004/movielens-artifacts/resolve/main/user_cf.pkl",
     "src/models/user_item_matrix.npz": "https://huggingface.co/datasets/Vaibhav28092004/movielens-artifacts/resolve/main/user_item_matrix.npz",
     "src/models/tfidf_matrix.npz": "https://huggingface.co/datasets/Vaibhav28092004/movielens-artifacts/resolve/main/tfidf_matrix.npz"
-    
-    
 }
-
 
 @st.cache_resource
 def ensure_models_downloaded():
@@ -55,8 +49,6 @@ def ensure_models_downloaded():
             with st.spinner(f"Downloading {file_name} from Hugging Face Storage..."):
                 urllib.request.urlretrieve(url, local_path)
     return True
-
-
 
 # Ensure python environment includes the project root directory
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -115,7 +107,7 @@ st.markdown("""
         border-radius: 12px;
         border: 1px solid #1e293b;
         transition: transform 0.4s cubic-bezier(0.165, 0.84, 0.44, 1), box-shadow 0.4s ease;
-        margin-bottom: 25px;
+        margin-bottom: 10px;
         overflow: hidden;
         position: relative;
     }
@@ -180,7 +172,6 @@ st.markdown("""
         font-weight: 700;
     }
     
-    /* Structural Rules Line Separators */
     hr {
         border-color: #1e293b !important;
     }
@@ -190,27 +181,33 @@ st.markdown("""
 # ---------------------------------------------------------------------
 # API METADATA & POSTER RESOLVER PIPELINE
 # ---------------------------------------------------------------------
-
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=86400, show_spinner=False)
 def get_movie_details(tmdb_id, movie_title=""):
     """
-    Fetches official posters, ratings, genres, and overviews from TMDB.
-    Returns clean contextual metadata dictionaries with reliable safety defaults.
+    Fetches official posters, ratings, genres, overview, cast, director,
+    and YouTube trailer keys in 1 cached request.
     """
     fallback_poster = "https://images.unsplash.com/photo-1485846234645-a62644f84728?w=500"
     details = {
         "poster": fallback_poster,
         "rating": "8.1", 
         "genre": "Drama & Sci-Fi",
-        "overview": "An intense, high-stakes cinematic journey exploring profound human connections, sensory choices, and narrative vectors."
+        "overview": "An intense, high-stakes cinematic journey exploring profound human connections, sensory choices, and narrative vectors.",
+        "director": "N/A",
+        "cast": [],
+        "trailer_url": None,
+        "release_date": "N/A",
+        "runtime": "N/A"
     }
     
     data = None
+    append_query = "&append_to_response=credits,videos"
+    
     # Tier 1: Direct Matching via ID Coordinates
     if not pd.isna(tmdb_id):
-        id_url = f"https://api.themoviedb.org/3/movie/{int(tmdb_id)}?api_key={TMDB_API_KEY}"
+        id_url = f"https://api.themoviedb.org/3/movie/{int(tmdb_id)}?api_key={TMDB_API_KEY}{append_query}"
         try:
-            res = requests.get(id_url, timeout=2)
+            res = requests.get(id_url, timeout=3)
             if res.status_code == 200:
                 data = res.json()
         except Exception:
@@ -221,11 +218,17 @@ def get_movie_details(tmdb_id, movie_title=""):
         clean_query = movie_title.split(" (")[0].strip()
         search_url = f"https://api.themoviedb.org/3/search/movie?api_key={TMDB_API_KEY}&query={requests.utils.quote(clean_query)}"
         try:
-            res = requests.get(search_url, timeout=2)
+            res = requests.get(search_url, timeout=3)
             if res.status_code == 200:
                 results = res.json().get("results", [])
                 if results:
-                    data = results[0]
+                    found_id = results[0].get("id")
+                    if found_id:
+                        detailed_res = requests.get(f"https://api.themoviedb.org/3/movie/{found_id}?api_key={TMDB_API_KEY}{append_query}", timeout=3)
+                        if detailed_res.status_code == 200:
+                            data = detailed_res.json()
+                        else:
+                            data = results[0]
         except Exception:
             pass
 
@@ -237,12 +240,39 @@ def get_movie_details(tmdb_id, movie_title=""):
             details["rating"] = f"{data.get('vote_average'):.1f}"
         if data.get("overview"):
             details["overview"] = data.get("overview")
+        if data.get("release_date"):
+            details["release_date"] = data.get("release_date")
+        if data.get("runtime"):
+            details["runtime"] = f"{data.get('runtime')} mins"
             
-        # Extract explicit genres strings if structural nested lists occur
         if data.get("genres"):
             details["genre"] = " & ".join([g["name"] for g in data["genres"][:2]])
         elif data.get("genre_ids"):
             details["genre"] = "Cinematic Collection"
+
+        # Cast & Director
+        credits = data.get("credits", {})
+        crew = credits.get("crew", [])
+        cast_list = credits.get("cast", [])
+        
+        details["director"] = next((m["name"] for m in crew if m.get("job") == "Director"), "N/A")
+        details["cast"] = [m["name"] for m in cast_list[:5]]
+        
+        # YouTube Trailer Key
+        videos = data.get("videos", {}).get("results", [])
+        trailer_key = None
+        for v in videos:
+            if v.get("site") == "YouTube" and v.get("type") == "Trailer":
+                trailer_key = v.get("key")
+                break
+        if not trailer_key and videos:
+            for v in videos:
+                if v.get("site") == "YouTube":
+                    trailer_key = v.get("key")
+                    break
+        
+        if trailer_key:
+            details["trailer_url"] = f"https://www.youtube.com/watch?v={trailer_key}"
 
     return details
 
@@ -258,6 +288,43 @@ movies_df = engine.orchestrator.movies_df
 semantic_df = engine.orchestrator.semantic_df
 
 # ---------------------------------------------------------------------
+# MODAL POP-UP DIALOG FOR CLICKABLE CARDS
+# ---------------------------------------------------------------------
+@st.dialog("🎬 Movie Details & Official Trailer", width="large")
+def show_movie_details_modal(item):
+    """Displays expanded movie metadata, cast, director, and embedded trailer."""
+    with st.spinner("Fetching trailer and full cast details..."):
+        meta = get_movie_details(item.get("tmdbId"), movie_title=item.get("title", ""))
+
+    col_poster, col_info = st.columns([1, 2])
+    
+    with col_poster:
+        st.image(meta["poster"], use_container_width=True)
+        
+    with col_info:
+        st.title(item.get("title", "Unknown Title"))
+        st.markdown(f"**⭐ TMDb Rating:** `{meta['rating']} / 10`")
+        st.markdown(f"**🎭 Genre:** {meta['genre']}")
+        st.markdown(f"**📅 Release Date:** {meta['release_date']}")
+        st.markdown(f"**⏱️ Runtime:** {meta['runtime']}")
+        st.markdown(f"**🎬 Director:** {meta['director']}")
+        if meta["cast"]:
+            st.markdown(f"**👥 Top Cast:** {', '.join(meta['cast'])}")
+
+    st.divider()
+
+    st.markdown("### 📖 Plot Overview")
+    st.write(meta["overview"])
+
+    st.divider()
+
+    st.markdown("### 🍿 Official Trailer")
+    if meta["trailer_url"]:
+        st.video(meta["trailer_url"])
+    else:
+        st.info("📺 No official trailer available for this movie.")
+
+# ---------------------------------------------------------------------
 # MODERN METADATA CAROUSEL ROW COMPONENT
 # ---------------------------------------------------------------------
 def render_cinematic_carousel(movie_list, limit=6):
@@ -267,10 +334,8 @@ def render_cinematic_carousel(movie_list, limit=6):
     
     for idx, item in enumerate(display_items):
         with cols[idx]:
-            # Pull rich structural content from API pipeline
             meta = get_movie_details(item.get('tmdbId'), movie_title=item.get('title', ''))
             
-            # Inject beautiful container flexbox representations
             st.markdown(f"""
                 <div class="movie-card">
                     <img src="{meta['poster']}" style="width:100%; object-fit:cover; aspect-ratio:2/3; display:block;"/>
@@ -285,13 +350,17 @@ def render_cinematic_carousel(movie_list, limit=6):
                     </div>
                 </div>
             """, unsafe_allow_html=True)
+            
+            # Interactive Action Button beneath card
+            unique_key = f"btn_{item.get('movieId', idx)}_{idx}"
+            if st.button("ℹ️ View Details", key=unique_key, use_container_width=True):
+                show_movie_details_modal(item)
 
 # ---------------------------------------------------------------------
 # TOP HEADER & ICON CONTROLS
 # ---------------------------------------------------------------------
 available_users = list(engine.orchestrator.userid_to_idx.keys())[:50]
 
-# 2-Column Top Bar: Header on left, Profile Popover aligned to TOP-RIGHT
 col_header, col_profile = st.columns([0.80, 0.20], vertical_alignment="top")
 
 with col_header:
@@ -299,10 +368,8 @@ with col_header:
     st.caption("Enterprise Dynamic Cross-Tower Content Delivery System")
 
 with col_profile:
-    # Adding a small top padding pushes the button to align cleanly with the title
     st.markdown("<div style='margin-top: 10px;'></div>", unsafe_allow_html=True)
     
-    # Icon-based profile & metrics popover top-right
     with st.popover("👤 Profile & Stats", use_container_width=True):
         st.markdown("🔐 User Session")
         selected_user = st.selectbox(
@@ -322,28 +389,15 @@ with col_profile:
             </div>
         """, unsafe_allow_html=True)
 
-# Top Navigation Tabs
-tab_home, tab_browse, tab_search = st.tabs(["🏠 Home Portal Feed", "🎭 Category Discovery Space", "🔍 Universal Vector Search"])
-
+# ---------------------------------------------------------------------
+# TOP NAVIGATION TABS
+# ---------------------------------------------------------------------
+tab_home, tab_browse, tab_search = st.tabs(["🏠 Home", "🎭 Genres", "🔍 Movie Search"])
 
 # ---------------------------------------------------------------------
 # VIEW LAYER 1: HOME PORTAL TAB
 # ---------------------------------------------------------------------
 with tab_home:
-    # CURATED COMPONENT 1: Editor's Choice Section Tiers
-    st.subheader("⭐ Editor's Choice: High-Fidelity Masterpieces")
-    curated_titles = ["Inception (2010)", "Matrix, The (1999)", "Interstellar (2014)", "Fight Club (1999)", "Pulp Fiction (1994)", "Spirited Away (2001)"]
-    curated_subset = semantic_df[semantic_df['title'].isin(curated_titles)]
-    if not curated_subset.empty:
-        curated_recs = curated_subset[["movieId", "title", "tmdbId"]].to_dict(orient="records")
-        render_cinematic_carousel(curated_recs, limit=6)
-    else:
-        backup_curated = movies_df.iloc[40:46][["movieId", "title", "tmdbId"]].to_dict(orient="records")
-        render_cinematic_carousel(backup_curated, limit=6)
-        
-    st.markdown("---")
-
-    # CAROUSEL COMPONENT 2: Collaborative Filtering Tier
     st.subheader(f"👤 Recommended For You (Tailored for Profile #{selected_user})")
     with st.spinner("Traversing interactive matrix neighborhoods..."):
         personal_recs = engine.orchestrator.recommend_user_cf(user_id=int(selected_user), top_k=6)
@@ -355,10 +409,21 @@ with tab_home:
             
     st.markdown("---")
 
-    # CAROUSEL COMPONENT 3: Global Popularity Trends
     st.subheader("🔥 Trending Globally on CineMatch")
     trending_recs = movies_df.iloc[15:21][["movieId", "title", "tmdbId"]].to_dict(orient="records")
     render_cinematic_carousel(trending_recs, limit=6)
+
+    st.subheader("⭐ Editor's Choice: High-Fidelity Masterpieces")
+    curated_titles = ["Inception (2010)", "Matrix, The (1999)", "Interstellar (2014)", "Fight Club (1999)", "Pulp Fiction (1994)", "Spirited Away (2001)"]
+    curated_subset = semantic_df[semantic_df['title'].isin(curated_titles)]
+    if not curated_subset.empty:
+        curated_recs = curated_subset[["movieId", "title", "tmdbId"]].to_dict(orient="records")
+        render_cinematic_carousel(curated_recs, limit=6)
+    else:
+        backup_curated = movies_df.iloc[40:46][["movieId", "title", "tmdbId"]].to_dict(orient="records")
+        render_cinematic_carousel(backup_curated, limit=6)
+
+    st.markdown("---")
 
 # ---------------------------------------------------------------------
 # VIEW LAYER 2: BROWSE CATEGORIES TAB
@@ -389,7 +454,6 @@ with tab_browse:
 with tab_search:
     st.subheader("🔍 Universal Movie Search")
     
-    # Single unified search bar for both direct titles and fuzzy typos
     user_query = st.text_input(
         "Search Box Query Input",
         placeholder="🍿 Type any movie title (e.g. Inception, Avatr, Toy Stori)...",
@@ -401,21 +465,17 @@ with tab_search:
             all_catalog_titles = semantic_df['title'].tolist()
             selected_title = None
             
-            # Step 1: Direct case-insensitive match check
             exact_matches = semantic_df[semantic_df['title'].str.contains(user_query, case=False, na=False)]
             
             if not exact_matches.empty:
-                # Pick the closest exact/partial match from the dataset
                 selected_title = exact_matches.iloc[0]['title']
             else:
-                # Step 2: Automatic fuzzy spellcheck if there's a typo
                 fuzzy_hits = get_close_matches(user_query, all_catalog_titles, n=1, cutoff=0.4)
                 if fuzzy_hits:
                     suggested_title = fuzzy_hits[0]
                     st.info(f"💡 *Did you mean:* **{suggested_title}**?")
                     selected_title = suggested_title
 
-            # Step 3: Render the searched/corrected movie + its 5 FAISS vector recommendations
             if selected_title:
                 target_movie_df = semantic_df[semantic_df['title'] == selected_title]
                 
@@ -423,13 +483,10 @@ with tab_search:
                     target_movie_row = target_movie_df.iloc[0]
                     searched_movie_dict = target_movie_row[["movieId", "title", "tmdbId"]].to_dict()
                     
-                    # Fetch top 5 recommendations using the resolved title as vector anchor
                     semantic_recs = engine.orchestrator.recommend_semantic(selected_title, top_k=5)
                     
                     if semantic_recs:
                         st.markdown(f"### ✨ Displaying: *\"{selected_title}\"* & Similar Recommendations")
-                        
-                        # Prepend searched/corrected movie as Card #1 + 5 recommendations
                         final_display_list = [searched_movie_dict] + semantic_recs
                         render_cinematic_carousel(final_display_list, limit=6)
                     else:
